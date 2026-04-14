@@ -22,6 +22,7 @@ pin-project-lite = "0.2.0"
 pollster = "0.4.0"
 smol = "2.0.0"
 tokio = { version = "1.51.0", features = ["macros", "rt", "time"] }
+waker-fn = "1.2.0"
 
 [lints.rust]
 unknown_lints = { level = "allow", priority = -1 }

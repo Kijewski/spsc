@@ -1,12 +1,15 @@
 #![allow(clippy::unwrap_used)] // it's okay to use `.unwrap()` in tests
 
 use std::pin::{Pin, pin};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering::SeqCst;
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use tokio::time::timeout;
 
-use crate::{RecvError, SendError, channel};
+use crate::{RecvError, SendError, TryRecvError, channel};
 
 macro_rules! test_in_multiple_runtimes {
     (
@@ -191,6 +194,33 @@ fn no_panics_when_polled_after_completion_times_two() {
         Pin::new(&mut receiver).poll(&mut cx),
         Poll::Ready(Err(RecvError))
     );
+    assert_eq!(
+        Pin::new(&mut receiver).poll(&mut cx),
+        Poll::Ready(Err(RecvError))
+    );
+}
+
+#[test]
+#[allow(clippy::bool_assert_comparison)] // more consistent, and easier on the eyes than `!(!..)`
+fn send_and_try_recv() {
+    let (sender, receiver) = channel();
+    let mut receiver = pin!(receiver);
+
+    let woken = Arc::new(AtomicBool::new(false));
+    let waker = waker_fn::waker_fn({
+        let woken = Arc::clone(&woken);
+        move || woken.store(true, SeqCst)
+    });
+    let mut cx = Context::from_waker(&waker);
+
+    assert_eq!(Pin::new(&mut receiver).poll(&mut cx), Poll::Pending);
+    assert_eq!(woken.load(SeqCst), false);
+    assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
+    assert_eq!(woken.load(SeqCst), false);
+    assert_eq!(sender.send(37845), Ok(()));
+    assert_eq!(woken.load(SeqCst), true);
+    assert_eq!(receiver.try_recv(), Ok(37845));
+    assert_eq!(receiver.try_recv(), Err(TryRecvError::Disconnected));
     assert_eq!(
         Pin::new(&mut receiver).poll(&mut cx),
         Poll::Ready(Err(RecvError))
