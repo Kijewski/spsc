@@ -17,10 +17,6 @@ concurrency:
 
 jobs:
   Rustfmt:
-    strategy:
-      matrix:
-        toolchain:
-          - nightly
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -31,16 +27,11 @@ jobs:
       - run: cargo fmt -- --check
 
   Clippy:
-    strategy:
-      matrix:
-        toolchain:
-          - nightly
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@nightly
         with:
-          toolchain: ${{ matrix.toolchain }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets --all-features -- -D warnings
@@ -62,16 +53,10 @@ jobs:
       - run: cargo test --all-targets --all-features
 
   Docs:
-    strategy:
-      matrix:
-        toolchain:
-          - nightly
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.toolchain }}
+      - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
       - uses: dtolnay/install@cargo-docs-rs
       - run: cargo docs-rs
@@ -119,3 +104,26 @@ jobs:
           tool: cargo-readme
       - run: cargo readme --no-license --no-title --no-indent-headings > README.md
       - run: git diff --quiet HEAD -- README.md
+
+  PublicApi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-public-api
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo public-api
+      - run: cargo public-api diff
+
+  SemverChecks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo semver-checks
