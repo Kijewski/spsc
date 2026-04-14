@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)] // it's okay to use `.unwrap()` in tests
 
-use std::pin::{Pin, pin};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::SeqCst;
@@ -165,8 +165,7 @@ test_in_multiple_runtimes! {
 
 #[test]
 fn no_panics_when_polled_after_completion() {
-    let (sender, receiver) = channel();
-    let mut receiver = pin!(receiver);
+    let (sender, mut receiver) = channel();
     let mut cx = Context::from_waker(Waker::noop());
 
     assert_eq!(Pin::new(&mut receiver).poll(&mut cx), Poll::Pending);
@@ -180,8 +179,7 @@ fn no_panics_when_polled_after_completion() {
 
 #[test]
 fn no_panics_when_polled_after_completion_times_two() {
-    let (sender, receiver) = channel();
-    let mut receiver = pin!(receiver);
+    let (sender, mut receiver) = channel();
     let mut cx = Context::from_waker(Waker::noop());
 
     assert_eq!(Pin::new(&mut receiver).poll(&mut cx), Poll::Pending);
@@ -203,8 +201,7 @@ fn no_panics_when_polled_after_completion_times_two() {
 #[test]
 #[allow(clippy::bool_assert_comparison)] // more consistent, and easier on the eyes than `!(!..)`
 fn send_and_try_recv() {
-    let (sender, receiver) = channel();
-    let mut receiver = pin!(receiver);
+    let (sender, mut receiver) = channel();
 
     let woken = Arc::new(AtomicBool::new(false));
     let waker = waker_fn::waker_fn({

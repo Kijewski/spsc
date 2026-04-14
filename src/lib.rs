@@ -105,7 +105,10 @@ pin_project! {
 ///
 /// The entangled [`Receiver`] was already dropped.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct SendError<T>(pub T);
+pub struct SendError<T>(
+    /// The `value` argument of [`Sender::send()`].
+    pub T,
+);
 
 /// An error returned from <code>[receiver][Receiver].await</code>.
 ///
@@ -142,6 +145,8 @@ enum State<T> {
     /// A value has been sent and is waiting for the receiver to consume it.
     Value(T),
 }
+
+impl<T> Unpin for Sender<T> {}
 
 impl<T> fmt::Debug for Sender<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -209,7 +214,7 @@ impl<T> Sender<T> {
             let Some(inner) = self.holder.0.take() else {
                 return Err(SendError(value));
             };
-            let inner = &mut *lock(&inner);
+            let mut inner = lock(&inner);
 
             if !matches!(inner.state, State::Alive) {
                 return Err(SendError(value));
@@ -238,7 +243,7 @@ impl<T> Receiver<T> {
     pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
         // Rationale for the block: We should drop the lock before waking up waiting threads.
         let (result, waker) = {
-            let inner = &mut *lock(self.holder.0.as_deref().ok_or(TryRecvError::Disconnected)?);
+            let mut inner = lock(self.holder.0.as_deref().ok_or(TryRecvError::Disconnected)?);
             let result = match replace(&mut inner.state, State::Dead) {
                 State::Alive => {
                     inner.state = State::Alive;
@@ -270,7 +275,7 @@ impl<T> Future for Receiver<T> {
                 // the sender was dropped is not entirely wrong, either.
                 return Poll::Ready(Err(RecvError));
             };
-            let inner = &mut *lock(inner);
+            let mut inner = lock(inner);
 
             match replace(&mut inner.state, State::Dead) {
                 State::Value(value) => Ok(value),
@@ -298,7 +303,7 @@ impl<T> Drop for Holder<T> {
         let Some(inner) = self.0.take() else {
             return;
         };
-        let inner = &mut *lock(&inner);
+        let mut inner = lock(&inner);
 
         if matches!(inner.state, State::Alive) {
             inner.state = State::Dead;
