@@ -11,92 +11,6 @@ use tokio::time::timeout;
 
 use crate::{RecvError, SendError, TryRecvError, channel};
 
-macro_rules! test_in_multiple_runtimes {
-    (
-        $(mod in_any {
-            $(async fn $any_name:ident() $any_block:block)*
-        })?
-
-        $(mod in_tokio {
-            $(async fn $tokio_name:ident() $tokio_block:block)*
-        })?
-
-        $(mod in_pollster {
-            $(async fn $pollster_name:ident() $pollster_block:block)*
-        })?
-
-        $(mod in_smol {
-            $(async fn $smol_name:ident() $smol_block:block)*
-        })?
-    ) => {
-        test_in_multiple_runtimes! {
-            @
-
-            mod in_tokio {
-                $($(async fn $any_name() $any_block)*)?
-                $($(async fn $tokio_name() $tokio_block)*)?
-            }
-
-            mod in_pollster {
-                $($(async fn $any_name() $any_block)*)?
-                $($(async fn $pollster_name() $pollster_block)*)?
-            }
-
-            mod in_smol {
-                $($(async fn $any_name() $any_block)*)?
-                $($(async fn $smol_name() $smol_block)*)?
-            }
-        }
-    };
-
-    (
-        @
-
-        mod in_tokio {
-            $(async fn $tokio_name:ident() $tokio_block:block)*
-        }
-
-        mod in_pollster {
-            $(async fn $pollster_name:ident() $pollster_block:block)*
-        }
-
-        mod in_smol {
-            $(async fn $smol_name:ident() $smol_block:block)*
-        }
-    ) => {
-        mod in_tokio {
-            use super::*;
-
-            $(
-                #[tokio::test]
-                async fn $tokio_name() $tokio_block
-            )*
-        }
-
-        mod in_pollster {
-            use super::*;
-
-            $(
-                #[test]
-                fn $pollster_name() {
-                    pollster::block_on(async $pollster_block)
-                }
-            )*
-        }
-
-        mod in_smol {
-            use super::*;
-
-            $(
-                #[test]
-                fn $smol_name() {
-                    smol::block_on(async $smol_block)
-                }
-            )*
-        }
-    };
-}
-
 test_in_multiple_runtimes! {
     mod in_any {
         async fn receiver_gets_sent_value() {
@@ -223,3 +137,91 @@ fn send_and_try_recv() {
         Poll::Ready(Err(RecvError))
     );
 }
+
+macro_rules! test_in_multiple_runtimes {
+    (
+        $(mod in_any {
+            $(async fn $any_name:ident() $any_block:block)*
+        })?
+
+        $(mod in_tokio {
+            $(async fn $tokio_name:ident() $tokio_block:block)*
+        })?
+
+        $(mod in_pollster {
+            $(async fn $pollster_name:ident() $pollster_block:block)*
+        })?
+
+        $(mod in_smol {
+            $(async fn $smol_name:ident() $smol_block:block)*
+        })?
+    ) => {
+        test_in_multiple_runtimes! {
+            @
+
+            mod in_tokio {
+                $($(async fn $any_name() $any_block)*)?
+                $($(async fn $tokio_name() $tokio_block)*)?
+            }
+
+            mod in_pollster {
+                $($(async fn $any_name() $any_block)*)?
+                $($(async fn $pollster_name() $pollster_block)*)?
+            }
+
+            mod in_smol {
+                $($(async fn $any_name() $any_block)*)?
+                $($(async fn $smol_name() $smol_block)*)?
+            }
+        }
+    };
+
+    (
+        @
+
+        mod in_tokio {
+            $(async fn $tokio_name:ident() $tokio_block:block)*
+        }
+
+        mod in_pollster {
+            $(async fn $pollster_name:ident() $pollster_block:block)*
+        }
+
+        mod in_smol {
+            $(async fn $smol_name:ident() $smol_block:block)*
+        }
+    ) => {
+        mod in_tokio {
+            use super::*;
+
+            $(
+                #[tokio::test]
+                async fn $tokio_name() $tokio_block
+            )*
+        }
+
+        mod in_pollster {
+            use super::*;
+
+            $(
+                #[test]
+                fn $pollster_name() {
+                    pollster::block_on(async $pollster_block)
+                }
+            )*
+        }
+
+        mod in_smol {
+            use super::*;
+
+            $(
+                #[test]
+                fn $smol_name() {
+                    smol::block_on(async $smol_block)
+                }
+            )*
+        }
+    };
+}
+
+use test_in_multiple_runtimes;
