@@ -243,7 +243,7 @@ impl<T> Receiver<T> {
                 State::Alive => {
                     inner.state = State::Alive;
                     return Err(TryRecvError::Empty);
-                }
+                },
                 State::Dead => Err(TryRecvError::Disconnected),
                 State::Value(value) => Ok(value),
             };
@@ -285,7 +285,7 @@ impl<T> Future for Receiver<T> {
                         inner.waker = Some(cx.waker().clone());
                     }
                     return Poll::Pending;
-                }
+                },
             }
         };
         this.holder.0 = None;
