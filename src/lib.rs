@@ -138,10 +138,6 @@ enum State<T> {
     Value(T),
 }
 
-impl<T> Unpin for Sender<T> {}
-
-impl<T> Unpin for Receiver<T> {}
-
 impl<T> fmt::Debug for Sender<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Sender").finish_non_exhaustive()

@@ -11,6 +11,13 @@ use tokio::time::timeout;
 
 use crate::{RecvError, SendError, TryRecvError, channel};
 
+#[allow(dead_code)] // it's only there to ensure an assumption
+trait ExpectedToBeUnpin: Unpin {}
+
+impl<T> ExpectedToBeUnpin for crate::Sender<T> {}
+impl<T> ExpectedToBeUnpin for crate::Receiver<T> {}
+impl<T> ExpectedToBeUnpin for crate::Holder<T> {}
+
 test_in_multiple_runtimes! {
     mod in_any {
         async fn receiver_gets_sent_value() {
