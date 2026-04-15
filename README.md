@@ -39,6 +39,6 @@ Contributions must be licensed under the same terms.
 Users may follow any one of these licenses, or all of them.
 
 See the individual license texts at
-* <https://choosealicense.com/licenses/isc/>,
-* <https://choosealicense.com/licenses/mit/>, and
-* <https://choosealicense.com/licenses/apache-2.0/>.
+* <https://spdx.org/licenses/ISC.html>,
+* <https://spdx.org/licenses/MIT.html>, and
+* <https://spdx.org/licenses/Apache-2.0.html>.

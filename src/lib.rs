@@ -44,15 +44,16 @@
 //! Users may follow any one of these licenses, or all of them.
 //!
 //! See the individual license texts at
-//! * <https://choosealicense.com/licenses/isc/>,
-//! * <https://choosealicense.com/licenses/mit/>, and
-//! * <https://choosealicense.com/licenses/apache-2.0/>.
+//! * <https://spdx.org/licenses/ISC.html>,
+//! * <https://spdx.org/licenses/MIT.html>, and
+//! * <https://spdx.org/licenses/Apache-2.0.html>.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 #[cfg(test)]
 mod tests;
 
+use std::convert::Infallible;
 use std::error::Error;
 use std::fmt;
 use std::future::Future;
@@ -182,6 +183,24 @@ impl<T> Error for SendError<T> {}
 impl Error for RecvError {}
 
 impl Error for TryRecvError {}
+
+impl<T> From<Infallible> for SendError<T> {
+    fn from(value: Infallible) -> Self {
+        match value {}
+    }
+}
+
+impl From<Infallible> for RecvError {
+    fn from(value: Infallible) -> Self {
+        match value {}
+    }
+}
+
+impl From<Infallible> for TryRecvError {
+    fn from(value: Infallible) -> Self {
+        match value {}
+    }
+}
 
 // `#[derive(Clone)]` will `impl Clone for Holder<T> where T: Clone`,
 // but we only need `Arc<_>: Clone`, and `Arc<_>` is always `Clone`.
