@@ -61,23 +61,19 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 
-use pin_project_lite::pin_project;
-
 /// Returns an entangled <code>([Sender], [Receiver])</code> pair.
 ///
 /// The [`Receiver`] is a [`Future`] that waits for a value to be sent by its [`Sender`].
 #[must_use]
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
-    let holder = Holder(Some(Arc::new(Mutex::new(Inner {
-        state: State::Alive,
-        waker: None,
-    }))));
-
+    let holder = Holder::default();
     (
         Sender {
             holder: holder.clone(),
         },
-        Receiver { holder },
+        Receiver {
+            holder: Some(holder),
+        },
     )
 }
 
@@ -86,19 +82,16 @@ pub struct Sender<T> {
     holder: Holder<T>,
 }
 
-pin_project! {
-    /// Waits for the [`Sender`] to send a value.
-    ///
-    /// This [`Future`] is drop-safe.
-    ///
-    /// # Errors
-    ///
-    /// The [`Future`] returns <code>[Err]\([RecvError])</code> if the entangled [`Sender`]
-    /// was dropped without sending a value.
-    pub struct Receiver<T> {
-        #[pin]
-        holder: Holder<T>,
-    }
+/// Waits for the [`Sender`] to send a value.
+///
+/// This [`Future`] is drop-safe.
+///
+/// # Errors
+///
+/// The [`Future`] returns <code>[Err]\([RecvError])</code> if the entangled [`Sender`]
+/// was dropped without sending a value.
+pub struct Receiver<T> {
+    holder: Option<Holder<T>>,
 }
 
 /// An error returned from [`Sender::send()`].
@@ -129,8 +122,7 @@ pub enum TryRecvError {
     Disconnected,
 }
 
-// `pin_project!` does not allow to implement `Drop`, so this indirection is needed.
-struct Holder<T>(Option<Arc<Mutex<Inner<T>>>>);
+struct Holder<T>(Pin<Arc<Mutex<Inner<T>>>>);
 
 struct Inner<T> {
     state: State<T>,
@@ -147,6 +139,8 @@ enum State<T> {
 }
 
 impl<T> Unpin for Sender<T> {}
+
+impl<T> Unpin for Receiver<T> {}
 
 impl<T> fmt::Debug for Sender<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -202,33 +196,31 @@ impl<T> Clone for Holder<T> {
     }
 }
 
+impl<T> Default for Holder<T> {
+    #[inline]
+    fn default() -> Self {
+        Self(Arc::pin(Mutex::new(Inner {
+            state: State::Alive,
+            waker: None,
+        })))
+    }
+}
+
 impl<T> Sender<T> {
     /// Consumes `Sender` and transmits `value` to [`Receiver`].
     ///
     /// # Errors
     ///
     /// Returns <code>[Err]\([SendError]\(value))</code> if the [`Receiver`] was dropped.
-    pub fn send(mut self, value: T) -> Result<(), SendError<T>> {
-        // Rationale for the block: We should drop the lock before waking up waiting threads.
-        let waker = {
-            let Some(inner) = self.holder.0.take() else {
-                return Err(SendError(value));
-            };
-            let mut inner = lock(&inner);
-
-            if !matches!(inner.state, State::Alive) {
-                return Err(SendError(value));
-            }
-
-            inner.state = State::Value(value);
-            inner.waker.take()
-        };
-
-        if let Some(waker) = waker {
-            waker.wake();
+    pub fn send(self, value: T) -> Result<(), SendError<T>> {
+        let mut guard = self.holder.lock();
+        if let State::Alive = guard.state {
+            guard.state = State::Value(value);
+            take_waker_and_wake(guard);
+            Ok(())
+        } else {
+            Err(SendError(value))
         }
-        // No need to set `self.holder.0 = None`. We drop `self` at the end of the method, anyway.
-        Ok(())
     }
 }
 
@@ -241,104 +233,96 @@ impl<T> Receiver<T> {
     /// yet, or <code>Err(TryRecvError::Disconnected)</code> if the Sender was dropped before
     /// sending a value.
     pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
-        // Rationale for the block: We should drop the lock before waking up waiting threads.
-        let (result, waker) = {
-            let mut inner = lock(self.holder.0.as_deref().ok_or(TryRecvError::Disconnected)?);
-            let result = match replace(&mut inner.state, State::Dead) {
-                State::Alive => {
-                    inner.state = State::Alive;
-                    return Err(TryRecvError::Empty);
-                },
-                State::Dead => Err(TryRecvError::Disconnected),
-                State::Value(value) => Ok(value),
-            };
-            (result, inner.waker.take())
-        };
+        let guard = self
+            .holder
+            .as_ref()
+            .ok_or(TryRecvError::Disconnected)?
+            .lock();
 
-        if let Some(waker) = waker {
-            waker.wake();
+        if let State::Alive = guard.state {
+            Err(TryRecvError::Empty)
+        } else {
+            let value = take_value_waker_and_wake(guard);
+            self.holder = None;
+            value.ok_or(TryRecvError::Disconnected)
         }
-        self.holder.0 = None;
-        result
     }
 }
 
 impl<T> Future for Receiver<T> {
     type Output = Result<T, RecvError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.project();
-        let (result, existing) = {
-            // Please forgive me for the next line!
-            let Some(inner) = this.holder.as_ref().get_ref().0.as_ref() else {
-                // Poll after completion ... We should probably panic, but simply returning that
-                // the sender was dropped is not entirely wrong, either.
-                return Poll::Ready(Err(RecvError));
-            };
-            let mut inner = lock(inner);
-
-            if matches!(&inner.state, State::Alive) {
-                let old_waker = if let Some(old_waker) = inner.waker.take() {
-                    if old_waker.will_wake(cx.waker()) {
-                        inner.waker = Some(old_waker);
-                        None
-                    } else {
-                        inner.waker = Some(cx.waker().clone());
-                        Some(old_waker)
-                    }
-                } else {
-                    inner.waker = Some(cx.waker().clone());
-                    None
-                };
-
-                drop(inner);
-                if let Some(existing) = old_waker {
-                    existing.wake();
-                }
-                return Poll::Pending;
-            }
-
-            let result = if let State::Value(value) = replace(&mut inner.state, State::Dead) {
-                Ok(value)
-            } else {
-                Err(RecvError)
-            };
-            (result, inner.waker.take())
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let Some(holder) = self.holder.as_ref() else {
+            // Poll after completion ... We should probably panic, but simply returning that
+            // the sender was dropped is not entirely wrong, either.
+            return Poll::Ready(Err(RecvError));
         };
+        let mut guard = holder.lock();
 
-        // Make sure that an existing waiting thread is woken up.
-        // I am not sure if this logic is even needed, but better safe than sorry, I guess.
-        // Spurious wake-ups are always acceptable, but spurious deadlocks are less so.
-        if let Some(existing) = existing
-            && !cx.waker().will_wake(&existing)
-        {
-            existing.wake();
+        if let State::Alive = guard.state {
+            let old_waker = if let Some(old_waker) = guard.waker.take() {
+                if old_waker.will_wake(cx.waker()) {
+                    guard.waker = Some(old_waker);
+                    None
+                } else {
+                    guard.waker = Some(cx.waker().clone());
+                    Some(old_waker)
+                }
+            } else {
+                guard.waker = Some(cx.waker().clone());
+                None
+            };
+
+            wake(old_waker, guard);
+            Poll::Pending
+        } else {
+            let value = take_value_waker_and_wake(guard);
+            self.holder = None;
+            Poll::Ready(value.ok_or(RecvError))
         }
-
-        this.holder.0 = None;
-        Poll::Ready(result)
     }
 }
 
 impl<T> Drop for Holder<T> {
     fn drop(&mut self) {
-        let Some(inner) = self.0.take() else {
-            return;
-        };
-        let mut inner = lock(&inner);
-
-        if matches!(inner.state, State::Alive) {
-            inner.state = State::Dead;
+        let mut guard = self.lock();
+        if let State::Alive = guard.state {
+            guard.state = State::Dead;
         }
-        if let Some(waker) = inner.waker.take() {
-            waker.wake();
+        take_waker_and_wake(guard);
+    }
+}
+
+impl<T> Holder<T> {
+    fn lock(&self) -> MutexGuard<'_, Inner<T>> {
+        match self.0.lock() {
+            Ok(inner) => inner,
+            Err(inner) => inner.into_inner(),
         }
     }
 }
 
-fn lock<T>(inner: &Mutex<Inner<T>>) -> MutexGuard<'_, Inner<T>> {
-    match inner.lock() {
-        Ok(inner) => inner,
-        Err(inner) => inner.into_inner(),
+fn take_value_waker_and_wake<T>(mut guard: MutexGuard<'_, Inner<T>>) -> Option<T> {
+    let result = if let State::Value(value) = replace(&mut guard.state, State::Dead) {
+        Some(value)
+    } else {
+        None
+    };
+    take_waker_and_wake(guard);
+    result
+}
+
+fn take_waker_and_wake<T>(mut guard: MutexGuard<'_, Inner<T>>) {
+    wake(guard.waker.take(), guard);
+}
+
+fn wake<T>(waker: Option<Waker>, guard: MutexGuard<'_, Inner<T>>) {
+    // Drop the lock before waking the waiting thread.
+    // Otherwise it might get sent back to sleep immediately.
+    drop(guard);
+
+    if let Some(waker) = waker {
+        waker.wake();
     }
 }
