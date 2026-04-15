@@ -268,7 +268,7 @@ impl<T> Future for Receiver<T> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
-        let result = {
+        let (result, existing) = {
             // Please forgive me for the next line!
             let Some(inner) = this.holder.as_ref().get_ref().0.as_ref() else {
                 // Poll after completion ... We should probably panic, but simply returning that
@@ -277,22 +277,44 @@ impl<T> Future for Receiver<T> {
             };
             let mut inner = lock(inner);
 
-            match replace(&mut inner.state, State::Dead) {
-                State::Value(value) => Ok(value),
-                State::Dead => Err(RecvError),
-                State::Alive => {
-                    inner.state = State::Alive;
-                    if let Some(existing) = &inner.waker {
-                        if !existing.will_wake(cx.waker()) {
-                            inner.waker = Some(cx.waker().clone());
-                        }
+            if matches!(&inner.state, State::Alive) {
+                let old_waker = if let Some(old_waker) = inner.waker.take() {
+                    if old_waker.will_wake(cx.waker()) {
+                        inner.waker = Some(old_waker);
+                        None
                     } else {
                         inner.waker = Some(cx.waker().clone());
+                        Some(old_waker)
                     }
-                    return Poll::Pending;
-                },
+                } else {
+                    inner.waker = Some(cx.waker().clone());
+                    None
+                };
+
+                drop(inner);
+                if let Some(existing) = old_waker {
+                    existing.wake();
+                }
+                return Poll::Pending;
             }
+
+            let result = if let State::Value(value) = replace(&mut inner.state, State::Dead) {
+                Ok(value)
+            } else {
+                Err(RecvError)
+            };
+            (result, inner.waker.take())
         };
+
+        // Make sure that an existing waiting thread is woken up.
+        // I am not sure if this logic is even needed, but better safe than sorry, I guess.
+        // Spurious wake-ups are always acceptable, but spurious deadlocks are less so.
+        if let Some(existing) = existing
+            && !cx.waker().will_wake(&existing)
+        {
+            existing.wake();
+        }
+
         this.holder.0 = None;
         Poll::Ready(result)
     }

@@ -138,6 +138,57 @@ fn send_and_try_recv() {
     );
 }
 
+#[test]
+#[allow(clippy::bool_assert_comparison)] // more consistent, and easier on the eyes than `!(!..)`
+fn new_receiver_does_not_stall_old_receiver() {
+    let (sender, mut receiver) = channel();
+
+    let woken1 = Arc::new(AtomicBool::new(false));
+    let waker1 = waker_fn::waker_fn({
+        let woken = Arc::clone(&woken1);
+        move || woken.store(true, SeqCst)
+    });
+    let mut cx1 = Context::from_waker(&waker1);
+
+    let woken2 = Arc::new(AtomicBool::new(false));
+    let waker2 = waker_fn::waker_fn({
+        let woken = Arc::clone(&woken2);
+        move || woken.store(true, SeqCst)
+    });
+    let mut cx2 = Context::from_waker(&waker2);
+
+    assert_eq!(Pin::new(&mut receiver).poll(&mut cx1), Poll::Pending);
+    assert_eq!(woken1.load(SeqCst), false);
+    assert_eq!(woken2.load(SeqCst), false);
+    // => will wake cx1
+
+    assert_eq!(Pin::new(&mut receiver).poll(&mut cx2), Poll::Pending);
+    assert_eq!(woken1.load(SeqCst), true);
+    assert_eq!(woken2.load(SeqCst), false);
+    // => will wake cx2
+
+    woken1.store(false, SeqCst);
+    woken2.store(false, SeqCst);
+
+    assert_eq!(sender.send(78645), Ok(()));
+    assert_eq!(woken1.load(SeqCst), false);
+    assert_eq!(woken2.load(SeqCst), true);
+
+    woken1.store(false, SeqCst);
+    woken2.store(false, SeqCst);
+
+    assert_eq!(
+        Pin::new(&mut receiver).poll(&mut cx1),
+        Poll::Ready(Ok(78645))
+    );
+    assert_eq!(
+        Pin::new(&mut receiver).poll(&mut cx2),
+        Poll::Ready(Err(RecvError))
+    );
+    assert_eq!(woken1.load(SeqCst), false);
+    assert_eq!(woken2.load(SeqCst), false);
+}
+
 macro_rules! test_in_multiple_runtimes {
     (
         $(mod in_any {
