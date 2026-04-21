@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: 2026 René Kijewski <crates.io@k6i.de>
 // SPDX-License-Identifier: ISC OR MIT OR Apache-2.0
 
-//! # spsc: single producer, single consumer
+#![no_std]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
+//! # spsc: single producer, single consumer for `no_std` Rust
 //!
 //! [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/Kijewski/spsc/ci.yml?branch=main&style=flat-square&logo=github&logoColor=white "GitHub Workflow Status")](https://github.com/Kijewski/spsc/actions/workflows/ci.yml)
 //! [![Crates.io](https://img.shields.io/crates/v/spsc?logo=rust&style=flat-square "Crates.io")](https://crates.io/crates/spsc)
@@ -48,32 +51,37 @@
 //! * <https://spdx.org/licenses/MIT.html>, and
 //! * <https://spdx.org/licenses/Apache-2.0.html>.
 
-#![cfg_attr(docsrs, feature(doc_cfg))]
+#[cfg(any(doc, test))]
+extern crate std;
 
 #[cfg(test)]
 mod tests;
 
-use std::convert::Infallible;
-use std::error::Error;
-use std::fmt;
-use std::future::Future;
-use std::mem::replace;
-use std::pin::Pin;
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::task::{Context, Poll, Waker};
+use core::convert::Infallible;
+use core::error::Error;
+use core::fmt;
+use core::future::Future;
+use core::mem::replace;
+use core::pin::Pin;
+use core::task::{Context, Poll, Waker};
+
+use bilock::{Bilock, Guard};
 
 /// Returns an entangled <code>([Sender], [Receiver])</code> pair.
 ///
 /// The [`Receiver`] is a [`Future`] that waits for a value to be sent by its [`Sender`].
 #[must_use]
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
-    let holder = Holder::default();
+    let (sender, receiver) = Bilock::new(Inner {
+        state: State::Alive,
+        waker: None,
+    });
     (
         Sender {
-            holder: holder.clone(),
+            holder: Holder(sender),
         },
         Receiver {
-            holder: Some(holder),
+            holder: Some(Holder(receiver)),
         },
     )
 }
@@ -123,7 +131,7 @@ pub enum TryRecvError {
     Disconnected,
 }
 
-struct Holder<T>(Pin<Arc<Mutex<Inner<T>>>>);
+struct Holder<T>(Bilock<Inner<T>>);
 
 struct Inner<T> {
     state: State<T>,
@@ -202,33 +210,14 @@ impl From<Infallible> for TryRecvError {
     }
 }
 
-// `#[derive(Clone)]` will `impl Clone for Holder<T> where T: Clone`,
-// but we only need `Arc<_>: Clone`, and `Arc<_>` is always `Clone`.
-impl<T> Clone for Holder<T> {
-    #[inline]
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-
-impl<T> Default for Holder<T> {
-    #[inline]
-    fn default() -> Self {
-        Self(Arc::pin(Mutex::new(Inner {
-            state: State::Alive,
-            waker: None,
-        })))
-    }
-}
-
 impl<T> Sender<T> {
     /// Consumes `Sender` and transmits `value` to [`Receiver`].
     ///
     /// # Errors
     ///
     /// Returns <code>[Err]\([SendError]\(value))</code> if the [`Receiver`] was dropped.
-    pub fn send(self, value: T) -> Result<(), SendError<T>> {
-        let mut guard = self.holder.lock();
+    pub fn send(mut self, value: T) -> Result<(), SendError<T>> {
+        let mut guard = self.holder.0.lock();
         if let State::Alive = guard.state {
             guard.state = State::Value(value);
             take_waker_and_wake(guard);
@@ -248,11 +237,15 @@ impl<T> Receiver<T> {
     /// yet, or <code>Err(TryRecvError::Disconnected)</code> if the Sender was dropped before
     /// sending a value.
     pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
-        let guard = self
+        let Some(guard) = self
             .holder
-            .as_ref()
+            .as_mut()
             .ok_or(TryRecvError::Disconnected)?
-            .lock();
+            .0
+            .try_lock()
+        else {
+            return Err(TryRecvError::Empty);
+        };
 
         if let State::Alive = guard.state {
             Err(TryRecvError::Empty)
@@ -268,12 +261,15 @@ impl<T> Future for Receiver<T> {
     type Output = Result<T, RecvError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let Some(holder) = self.holder.as_ref() else {
+        let Some(holder) = self.holder.as_mut() else {
             // Poll after completion ... We should probably panic, but simply returning that
             // the sender was dropped is not entirely wrong, either.
             return Poll::Ready(Err(RecvError));
         };
-        let mut guard = holder.lock();
+        let Some(mut guard) = holder.0.try_lock() else {
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
+        };
 
         if let State::Alive = guard.state {
             let old_waker = if let Some(old_waker) = guard.waker.take() {
@@ -301,7 +297,7 @@ impl<T> Future for Receiver<T> {
 
 impl<T> Drop for Holder<T> {
     fn drop(&mut self) {
-        let mut guard = self.lock();
+        let mut guard = self.0.lock();
         if let State::Alive = guard.state {
             guard.state = State::Dead;
         }
@@ -309,16 +305,7 @@ impl<T> Drop for Holder<T> {
     }
 }
 
-impl<T> Holder<T> {
-    fn lock(&self) -> MutexGuard<'_, Inner<T>> {
-        match self.0.lock() {
-            Ok(inner) => inner,
-            Err(inner) => inner.into_inner(),
-        }
-    }
-}
-
-fn take_value_waker_and_wake<T>(mut guard: MutexGuard<'_, Inner<T>>) -> Option<T> {
+fn take_value_waker_and_wake<T>(mut guard: Guard<'_, Inner<T>>) -> Option<T> {
     let result = if let State::Value(value) = replace(&mut guard.state, State::Dead) {
         Some(value)
     } else {
@@ -328,11 +315,11 @@ fn take_value_waker_and_wake<T>(mut guard: MutexGuard<'_, Inner<T>>) -> Option<T
     result
 }
 
-fn take_waker_and_wake<T>(mut guard: MutexGuard<'_, Inner<T>>) {
+fn take_waker_and_wake<T>(mut guard: Guard<'_, Inner<T>>) {
     wake(guard.waker.take(), guard);
 }
 
-fn wake<T>(waker: Option<Waker>, guard: MutexGuard<'_, Inner<T>>) {
+fn wake<T>(waker: Option<Waker>, guard: Guard<'_, Inner<T>>) {
     // Drop the lock before waking the waiting thread.
     // Otherwise it might get sent back to sleep immediately.
     drop(guard);

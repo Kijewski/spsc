@@ -1,11 +1,13 @@
 #![allow(clippy::unwrap_used)] // it's okay to use `.unwrap()` in tests
 
-use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::SeqCst;
-use std::task::{Context, Poll, Waker};
-use std::time::Duration;
+extern crate alloc;
+
+use alloc::sync::Arc;
+use core::pin::Pin;
+use core::sync::atomic::AtomicBool;
+use core::sync::atomic::Ordering::SeqCst;
+use core::task::{Context, Poll, Waker};
+use core::time::Duration;
 
 use tokio::time::timeout;
 
@@ -269,6 +271,7 @@ macro_rules! test_in_multiple_runtimes {
             )*
         }
 
+        #[cfg(not(miri))]
         mod in_smol {
             use super::*;
 

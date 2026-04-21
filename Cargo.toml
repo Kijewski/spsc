@@ -7,19 +7,24 @@ license = "ISC OR MIT OR Apache-2.0"
 rust-version = "1.88.0"
 repository = "https://github.com/Kijewski/spsc"
 description = "An entangled sync sender + async receiver pair."
-keywords = ["async", "spsc", "channel", "future", "concurrency"]
-categories = ["asynchronous", "concurrency", "rust-patterns"]
+keywords = ["async", "spsc", "channel", "future", "no_std"]
+categories = ["asynchronous", "concurrency", "rust-patterns", "no-std"]
 
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--generate-link-to-definition", "--cfg=docsrs"]
 targets = ["x86_64-unknown-linux-gnu"]
 
+[dependencies]
+bilock = "0.1.0"
+
 [dev-dependencies]
 pollster = "0.4.0"
-smol = "2.0.0"
 tokio = { version = "1.52.0", features = ["macros", "rt", "time"] }
 waker-fn = "1.2.0"
+
+[target.'cfg(not(miri))'.dev-dependencies]
+smol = "2.0.0"
 
 [lints.rust]
 unknown_lints = { level = "allow", priority = -1 }
@@ -45,6 +50,7 @@ unused_results = "warn"
 warnings = "warn"
 
 [lints.clippy]
+alloc_instead_of_core = "warn"
 collapsible_match = "warn"
 expect_used = "warn"
 match_bool = "warn"
@@ -59,4 +65,6 @@ redundant_pattern = "warn"
 redundant_pattern_matching = "warn"
 single_match = "warn"
 single_match_else = "warn"
+std_instead_of_alloc = "warn"
+std_instead_of_core = "warn"
 unwrap_used = "warn"
