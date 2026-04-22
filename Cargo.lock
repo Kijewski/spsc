@@ -135,9 +135,9 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "bilock"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62c3c514162fbb604e1f9ee127674f333a5237d2f5a51d75038a2b2f33f61d66"
+checksum = "b3f28599c0830bb290b12bd5eb2ec32858958734698c295a5cc3b9480e6e2664"
 
 [[package]]
 name = "bitflags"

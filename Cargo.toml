@@ -16,7 +16,7 @@ rustdoc-args = ["--generate-link-to-definition", "--cfg=docsrs"]
 targets = ["x86_64-unknown-linux-gnu"]
 
 [dependencies]
-bilock = "0.1.0"
+bilock = "0.1.2"
 
 [dev-dependencies]
 pollster = "0.4.0"
